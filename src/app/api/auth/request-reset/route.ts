@@ -2,12 +2,13 @@ import { NextRequest } from "next/server";
 import { randomBytes } from "crypto";
 import { handle } from "@/lib/api";
 import { prisma } from "@/lib/prisma";
+import { sendPasswordResetEmail, isMailConfigured } from "@/lib/email";
 
 /**
- * Begin a password reset. Email delivery is intentionally pluggable — there is
- * no mail provider wired up, so in non-production the reset token is returned
- * directly. In production, send `token` to the user's email and drop it from
- * the response (see README "Password resets").
+ * Begin a password reset. Generates a one-hour token and emails a reset link
+ * via SMTP (Mailgun) when mail is configured. In non-production without mail
+ * configured, the token is returned directly so the flow is testable.
+ * Always responds with success so the endpoint can't enumerate accounts.
  */
 export async function POST(req: NextRequest) {
   return handle(async () => {
@@ -22,12 +23,20 @@ export async function POST(req: NextRequest) {
         where: { id: user.id },
         data: { resetToken: token, resetTokenExpires: new Date(Date.now() + 1000 * 60 * 60) },
       });
-      // TODO: email the token to user.email via your provider.
-      if (process.env.NODE_ENV !== "production") {
+
+      const base = process.env.APP_URL ?? req.nextUrl.origin;
+      const resetUrl = `${base}/reset?token=${token}`;
+
+      const sent = await sendPasswordResetEmail(user.email, resetUrl).catch((err) => {
+        console.error("Failed to send reset email:", err);
+        return false;
+      });
+
+      // Only surface the token in dev when there is no mail provider to send it.
+      if (!sent && !isMailConfigured() && process.env.NODE_ENV !== "production") {
         return { ok: true, token };
       }
     }
-    // Always report success so the endpoint can't be used to enumerate accounts.
     return { ok: true };
   });
 }

@@ -1,15 +1,26 @@
 "use client";
 
-import { useState } from "react";
+import { Suspense, useEffect, useState } from "react";
 import Link from "next/link";
+import { useSearchParams } from "next/navigation";
 import { api, ApiError } from "@/lib/client";
 
-export default function ResetPage() {
+function ResetForm() {
+  const searchParams = useSearchParams();
   const [email, setEmail] = useState("");
   const [token, setToken] = useState("");
   const [password, setPassword] = useState("");
   const [msg, setMsg] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
+
+  // Pre-fill the token when arriving from an emailed reset link.
+  useEffect(() => {
+    const t = searchParams.get("token");
+    if (t) {
+      setToken(t);
+      setMsg("Enter a new password to finish resetting your account.");
+    }
+  }, [searchParams]);
 
   async function request(e: React.FormEvent) {
     e.preventDefault();
@@ -17,12 +28,12 @@ export default function ResetPage() {
     setMsg(null);
     try {
       const res = await api.post<{ ok: boolean; token?: string }>("/api/auth/request-reset", { email });
-      // In non-production the token is returned directly (no mail provider wired up).
       if (res.token) {
+        // Dev mode only (no mail provider configured).
         setToken(res.token);
-        setMsg("Reset token generated below (dev mode). Set a new password.");
+        setMsg("Dev mode: reset token filled in below. Set a new password.");
       } else {
-        setMsg("If that email exists, a reset link has been sent.");
+        setMsg("If that email is registered, a reset link is on its way.");
       }
     } catch (err) {
       setError(err instanceof ApiError ? err.message : "Request failed");
@@ -48,12 +59,12 @@ export default function ResetPage() {
           <label className="label">Email</label>
           <input className="input" type="email" value={email} onChange={(e) => setEmail(e.target.value)} />
         </div>
-        <button className="btn-ghost w-full">Request reset token</button>
+        <button className="btn-ghost w-full">Email me a reset link</button>
       </form>
       <form onSubmit={reset} className="card space-y-3">
         <div>
           <label className="label">Reset token</label>
-          <input className="input" value={token} onChange={(e) => setToken(e.target.value)} />
+          <input className="input" value={token} onChange={(e) => setToken(e.target.value)} placeholder="From your email link" />
         </div>
         <div>
           <label className="label">New password</label>
@@ -65,5 +76,13 @@ export default function ResetPage() {
       {error && <p className="text-sm text-red-600">{error}</p>}
       <p className="text-center text-sm"><Link href="/login" className="underline">Back to login</Link></p>
     </div>
+  );
+}
+
+export default function ResetPage() {
+  return (
+    <Suspense fallback={<p className="text-fairway-600">Loading…</p>}>
+      <ResetForm />
+    </Suspense>
   );
 }

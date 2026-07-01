@@ -102,15 +102,33 @@ group sees each other's scores and trash talk update on their own devices withou
 manual refresh. There's no realtime server to operate — it just works on Vercel's
 serverless functions.
 
-## Password resets
+## Password resets (Mailgun SMTP)
 
-Reset is wired end-to-end except for the email send (no mail provider is bundled).
-`POST /api/auth/request-reset` stores a one-hour token; in non-production it returns the
-token directly so you can test the flow. To go live, send that token to the user's email
-from `src/app/api/auth/request-reset/route.ts` (marked with a `TODO`) using your provider
-of choice.
+Reset emails are sent over SMTP via [Mailgun](https://www.mailgun.com/) (or any SMTP
+server). `POST /api/auth/request-reset` stores a one-hour token and emails a
+`${APP_URL}/reset?token=…` link; the reset page pre-fills the token from that link.
+
+Configure these env vars (see `.env.example`):
+
+- `SMTP_HOST` (default `smtp.mailgun.org`), `SMTP_PORT` (`587` STARTTLS, or `465` TLS)
+- `SMTP_USER` / `SMTP_PASS` — your Mailgun **SMTP credentials**
+  (Mailgun → Sending → Domain settings → SMTP credentials)
+- `MAIL_FROM` — the From address on your verified domain
+- `APP_URL` — the app's public URL, used to build the reset link
+
+If `SMTP_USER`/`SMTP_PASS` are unset, sending is skipped; in non-production the API
+returns the token directly so the flow is still testable. The send logic lives in
+`src/lib/email.ts`.
 
 ---
+
+## Landing page & past champions
+
+The logged-out home page is a public overview: a hero, the live leaderboard of the most
+recent tournament (served without auth from `/api/public/featured`), a feature breakdown,
+the tournament rules, and a **Hall of Champions**. Edit `src/lib/history.ts` to fill in
+your real winners back to 2020 — any tournament you run in the app and mark **COMPLETE**
+is added automatically from its final standings.
 
 ## Project layout
 

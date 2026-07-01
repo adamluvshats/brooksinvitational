@@ -1,0 +1,277 @@
+// Brooks Invitational — data model
+// A tournament has Courses, Rounds (7 scramble + 1 playoff), Teams, Players, handicaps and a point system.
+
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider  = "postgresql"
+  url       = env("DATABASE_URL")
+  directUrl = env("DIRECT_URL")
+}
+
+// ---------------------------------------------------------------------------
+// Accounts & global roles
+// ---------------------------------------------------------------------------
+
+enum GlobalRole {
+  ADMIN // site administrator — can adjust anything on anyone's behalf
+  USER
+}
+
+model User {
+  id           String   @id @default(cuid())
+  username     String   @unique
+  email        String   @unique
+  passwordHash String
+  displayName  String
+  role         GlobalRole @default(USER)
+  createdAt    DateTime @default(now())
+
+  resetToken        String?
+  resetTokenExpires DateTime?
+
+  memberships      TournamentPlayer[]
+  createdTournaments Tournament[]      @relation("CreatedTournaments")
+  chatMessages     ChatMessage[]
+}
+
+// ---------------------------------------------------------------------------
+// Tournament
+// ---------------------------------------------------------------------------
+
+enum TournamentStatus {
+  SETUP
+  ACTIVE
+  PLAYOFF
+  COMPLETE
+}
+
+// How a 2-person scramble team's handicap is derived from its two partners.
+enum ScrambleHandicapMode {
+  MAX        // team handicap = the higher of the two partners (default — matches Brooks rules)
+  DIFFERENCE // team handicap = absolute difference of the two partners
+  AVERAGE    // team handicap = rounded average of the two partners
+}
+
+model Tournament {
+  id            String           @id @default(cuid())
+  name          String
+  year          Int
+  status        TournamentStatus @default(SETUP)
+  handicapMode  ScrambleHandicapMode @default(MAX)
+  pointsPerHole Int              @default(1) // points awarded to each player on the winning team per hole
+  createdAt     DateTime         @default(now())
+
+  createdById String
+  createdBy   User   @relation("CreatedTournaments", fields: [createdById], references: [id])
+
+  courses Course[]
+  rounds  Round[]
+  players TournamentPlayer[]
+  chat    ChatMessage[]
+}
+
+// ---------------------------------------------------------------------------
+// Course & holes
+// ---------------------------------------------------------------------------
+
+model Course {
+  id           String  @id @default(cuid())
+  name         String
+  tournamentId String
+  tournament   Tournament @relation(fields: [tournamentId], references: [id], onDelete: Cascade)
+
+  holes  Hole[]
+  rounds Round[]
+}
+
+model Hole {
+  id          String @id @default(cuid())
+  courseId    String
+  course      Course @relation(fields: [courseId], references: [id], onDelete: Cascade)
+  number      Int    // 1-18
+  par         Int
+  strokeIndex Int    // handicap rating 1-18 (1 = hardest, 18 = easiest)
+
+  @@unique([courseId, number])
+}
+
+// ---------------------------------------------------------------------------
+// Players (tournament membership)
+// ---------------------------------------------------------------------------
+
+enum HandicapClass {
+  SCRATCH // best player — 0
+  A       // 5
+  B       // 10
+  C       // 15
+  D       // 20
+}
+
+enum TournamentRole {
+  TOURNAMENT_ADMIN // can edit any hole score in this tournament
+  PLAYER           // can edit only their own scores/data
+}
+
+model TournamentPlayer {
+  id            String        @id @default(cuid())
+  tournamentId  String
+  tournament    Tournament    @relation(fields: [tournamentId], references: [id], onDelete: Cascade)
+  userId        String?
+  user          User?         @relation(fields: [userId], references: [id], onDelete: SetNull)
+  displayName   String
+  handicapClass HandicapClass @default(A)
+  // handicap is derived from class but stored so admins can override per player.
+  handicap      Int           @default(5)
+  role          TournamentRole @default(PLAYER)
+  createdAt     DateTime      @default(now())
+
+  teamMemberships TeamMember[]
+  holeScores      HoleScore[]
+  ldClaims        AchievementClaim[] @relation("LdPlayer")
+  mentions        ChatMention[]
+
+  @@unique([tournamentId, userId])
+}
+
+// ---------------------------------------------------------------------------
+// Rounds, teams, scores
+// ---------------------------------------------------------------------------
+
+enum RoundType {
+  SCRAMBLE // 2-man mixed partner scramble — one shared score per team
+  PLAYOFF  // stroke play, individual scores, paired by standings
+}
+
+enum RoundStatus {
+  PENDING
+  ACTIVE
+  COMPLETE
+}
+
+model Round {
+  id           String      @id @default(cuid())
+  tournamentId String
+  tournament   Tournament  @relation(fields: [tournamentId], references: [id], onDelete: Cascade)
+  courseId     String
+  course       Course      @relation(fields: [courseId], references: [id])
+  roundNumber  Int         // 1-8
+  name         String
+  type         RoundType   @default(SCRAMBLE)
+  status       RoundStatus @default(PENDING)
+  // The 9 hole numbers (1-18) played this round, in play order. JSON array of ints.
+  holeNumbers  Json
+
+  teams        Team[]
+  holeScores   HoleScore[]
+  achievements Achievement[]
+
+  @@unique([tournamentId, roundNumber])
+}
+
+// A scoring unit within a round.
+// SCRAMBLE: 2 members, one shared HoleScore per hole.
+// PLAYOFF:  2 members (the bracket pair) but each member records individual HoleScores.
+model Team {
+  id          String @id @default(cuid())
+  roundId     String
+  round       Round  @relation(fields: [roundId], references: [id], onDelete: Cascade)
+  name        String?
+  // For playoff pairs: bracket rank 1 => positions 1&2, 2 => 3&4, etc. Null for scramble.
+  bracketRank Int?
+
+  members    TeamMember[]
+  holeScores HoleScore[]
+}
+
+model TeamMember {
+  id       String @id @default(cuid())
+  teamId   String
+  team     Team   @relation(fields: [teamId], references: [id], onDelete: Cascade)
+  playerId String
+  player   TournamentPlayer @relation(fields: [playerId], references: [id], onDelete: Cascade)
+
+  @@unique([teamId, playerId])
+}
+
+// A gross score for one hole.
+// SCRAMBLE: playerId is null, teamId is the team (one row per team per hole).
+// PLAYOFF:  playerId is set (one row per player per hole); teamId is the bracket pair.
+model HoleScore {
+  id         String @id @default(cuid())
+  roundId    String
+  round      Round  @relation(fields: [roundId], references: [id], onDelete: Cascade)
+  teamId     String
+  team       Team   @relation(fields: [teamId], references: [id], onDelete: Cascade)
+  playerId   String?
+  player     TournamentPlayer? @relation(fields: [playerId], references: [id], onDelete: Cascade)
+  holeNumber Int
+  strokes    Int    // true (gross) strokes
+  updatedAt  DateTime @updatedAt
+  updatedById String?
+
+  @@unique([roundId, teamId, playerId, holeNumber])
+}
+
+// ---------------------------------------------------------------------------
+// Longest Drive & Closest To Pin
+// ---------------------------------------------------------------------------
+
+enum AchievementType {
+  LONGEST_DRIVE
+  CLOSEST_TO_PIN
+}
+
+// Admin designates one LD (par 5) and one CTP (par 3) hole per round.
+model Achievement {
+  id         String          @id @default(cuid())
+  roundId    String
+  round      Round           @relation(fields: [roundId], references: [id], onDelete: Cascade)
+  type       AchievementType
+  holeNumber Int
+
+  claim AchievementClaim?
+
+  @@unique([roundId, type])
+}
+
+// The current holder (live-updated as players beat each other).
+model AchievementClaim {
+  id            String      @id @default(cuid())
+  achievementId String      @unique
+  achievement   Achievement @relation(fields: [achievementId], references: [id], onDelete: Cascade)
+  playerId      String
+  player        TournamentPlayer @relation("LdPlayer", fields: [playerId], references: [id], onDelete: Cascade)
+  // Distance in yards (longest drive) or feet (closest to pin). Stored as a label too for flexibility.
+  distance      Float
+  unit          String      @default("yds")
+  updatedAt     DateTime    @updatedAt
+}
+
+// ---------------------------------------------------------------------------
+// Chat / smack talk
+// ---------------------------------------------------------------------------
+
+model ChatMessage {
+  id           String   @id @default(cuid())
+  tournamentId String
+  tournament   Tournament @relation(fields: [tournamentId], references: [id], onDelete: Cascade)
+  userId       String
+  user         User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+  body         String
+  createdAt    DateTime @default(now())
+
+  mentions ChatMention[]
+}
+
+model ChatMention {
+  id        String      @id @default(cuid())
+  messageId String
+  message   ChatMessage @relation(fields: [messageId], references: [id], onDelete: Cascade)
+  playerId  String
+  player    TournamentPlayer @relation(fields: [playerId], references: [id], onDelete: Cascade)
+
+  @@unique([messageId, playerId])
+}

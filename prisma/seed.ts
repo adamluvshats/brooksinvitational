@@ -2,9 +2,14 @@
  * Seed a demo Brooks Invitational so the app is explorable immediately.
  * Run with: npm run db:seed
  *
- * Creates an admin login (admin / brooks123), 8 players, an 18-hole course,
- * the 7 scramble rounds with Longest Drive / Closest To Pin holes designated,
- * round 1 pairings, and a few sample scores.
+ * Creates an admin login (admin / brooks123), 8 players — each with their own
+ * login so you can sign in as anyone and test player-level permissions — an
+ * 18-hole course, the 7 scramble rounds with Longest Drive / Closest To Pin
+ * holes designated, and round 1 pairings.
+ *
+ * Test logins (all share the password "brooks123"):
+ *   admin      → Tournament Admin (site admin, also plays as "Brooks")
+ *   dustin, rory, jordan, justin, bryson, phil, bubba → players
  */
 import { PrismaClient } from "@prisma/client";
 import bcrypt from "bcryptjs";
@@ -33,15 +38,18 @@ const HOLES = [
   { number: 18, par: 4, strokeIndex: 14 },
 ];
 
+// Each player gets a login (username / email) so you can sign in as anyone.
+// "Brooks" is the admin account created above; the rest are regular players.
+// All share the password "brooks123".
 const PLAYERS = [
-  { displayName: "Brooks", handicapClass: "SCRATCH" as const, handicap: 0 },
-  { displayName: "Dustin", handicapClass: "A" as const, handicap: 5 },
-  { displayName: "Rory", handicapClass: "A" as const, handicap: 5 },
-  { displayName: "Jordan", handicapClass: "B" as const, handicap: 10 },
-  { displayName: "Justin", handicapClass: "B" as const, handicap: 10 },
-  { displayName: "Bryson", handicapClass: "C" as const, handicap: 15 },
-  { displayName: "Phil", handicapClass: "C" as const, handicap: 15 },
-  { displayName: "Bubba", handicapClass: "D" as const, handicap: 20 },
+  { displayName: "Brooks", handicapClass: "SCRATCH" as const, handicap: 0, username: "admin" },
+  { displayName: "Dustin", handicapClass: "A" as const, handicap: 5, username: "dustin" },
+  { displayName: "Rory", handicapClass: "A" as const, handicap: 5, username: "rory" },
+  { displayName: "Jordan", handicapClass: "B" as const, handicap: 10, username: "jordan" },
+  { displayName: "Justin", handicapClass: "B" as const, handicap: 10, username: "justin" },
+  { displayName: "Bryson", handicapClass: "C" as const, handicap: 15, username: "bryson" },
+  { displayName: "Phil", handicapClass: "C" as const, handicap: 15, username: "phil" },
+  { displayName: "Bubba", handicapClass: "D" as const, handicap: 20, username: "bubba" },
 ];
 
 async function main() {
@@ -76,10 +84,27 @@ async function main() {
 
   const players = [];
   for (const p of PLAYERS) {
+    // Brooks reuses the admin account; everyone else gets their own login.
+    const user =
+      p.username === "admin"
+        ? admin
+        : await prisma.user.upsert({
+            where: { username: p.username },
+            update: {},
+            create: {
+              username: p.username,
+              email: `${p.username}@brooksinvitational.com`,
+              passwordHash,
+              displayName: p.displayName,
+              role: "USER",
+            },
+          });
+
     players.push(
       await prisma.tournamentPlayer.create({
         data: {
           tournamentId: tournament.id,
+          userId: user.id,
           displayName: p.displayName,
           handicapClass: p.handicapClass,
           handicap: p.handicap,
@@ -88,8 +113,6 @@ async function main() {
       }),
     );
   }
-  // Link the admin user to the "Brooks" player so they can log in and score.
-  await prisma.tournamentPlayer.update({ where: { id: players[0].id }, data: { userId: admin.id } });
 
   const course = await prisma.course.create({
     data: { tournamentId: tournament.id, name: "Brooks National", holes: { create: HOLES } },
@@ -140,7 +163,11 @@ async function main() {
     }
   }
 
-  console.log("Seeded demo 'Brooks Invitational'. Log in as admin / brooks123");
+  console.log(
+    "Seeded demo 'Brooks Invitational'.\n" +
+      "  Admin login:   admin / brooks123\n" +
+      "  Player logins: dustin, rory, jordan, justin, bryson, phil, bubba (all / brooks123)",
+  );
 }
 
 main()

@@ -63,7 +63,7 @@ cp .env.example .env
 ### 3. Set up the database
 ```bash
 npx prisma migrate deploy   # apply the schema
-npm run db:seed             # optional: load a demo tournament (login: admin / brooks123)
+npm run db:seed             # optional: demo tournament + test logins (all pw: brooks123)
 ```
 (For iterating on the schema during development, use `npx prisma migrate dev`.)
 
@@ -88,6 +88,8 @@ create rounds, set the pairings, designate LD/CTP holes, and play.
    - `DIRECT_URL` — a direct (non-pooled) connection, if your provider distinguishes
      them (Neon/Supabase do); used for migrations. Falls back to `DATABASE_URL`.
    - `AUTH_SECRET` — a long random string.
+   - `RESEND_API_KEY`, `MAIL_FROM`, `APP_URL` — for confirmation & reset emails
+     (see [Email (Resend)](#email-resend) below). Optional; email is skipped if unset.
 4. The `build` script runs `prisma generate` automatically. To apply migrations on
    deploy, either run `npx prisma migrate deploy` from your machine against the prod
    DB once, or add it to the Vercel build command
@@ -102,22 +104,28 @@ group sees each other's scores and trash talk update on their own devices withou
 manual refresh. There's no realtime server to operate — it just works on Vercel's
 serverless functions.
 
-## Password resets (Mailgun SMTP)
+## Email (Resend)
 
-Reset emails are sent over SMTP via [Mailgun](https://www.mailgun.com/) (or any SMTP
-server). `POST /api/auth/request-reset` stores a one-hour token and emails a
-`${APP_URL}/reset?token=…` link; the reset page pre-fills the token from that link.
+Transactional email is sent via [Resend](https://resend.com). Two messages are sent:
+
+- **Welcome / confirmation** — on registration (`POST /api/auth/register`), a
+  best-effort welcome email is sent. A mail failure never blocks sign-up.
+- **Password reset** — `POST /api/auth/request-reset` stores a one-hour token and
+  emails a `${APP_URL}/reset?token=…` link; the reset page pre-fills the token.
 
 Configure these env vars (see `.env.example`):
 
-- `SMTP_HOST` (default `smtp.mailgun.org`), `SMTP_PORT` (`587` STARTTLS, or `465` TLS)
-- `SMTP_USER` / `SMTP_PASS` — your Mailgun **SMTP credentials**
-  (Mailgun → Sending → Domain settings → SMTP credentials)
-- `MAIL_FROM` — the From address on your verified domain
-- `APP_URL` — the app's public URL, used to build the reset link
+- `RESEND_API_KEY` — your Resend API key (Resend → API Keys; starts with `re_`).
+- `MAIL_FROM` — a From address on a domain you've **verified in Resend**, e.g.
+  `Brooks Invitational <noreply@brooksinvitational.com>`.
+- `APP_URL` — the app's public URL, used to build links in the emails.
 
-If `SMTP_USER`/`SMTP_PASS` are unset, sending is skipped; in non-production the API
-returns the token directly so the flow is still testable. The send logic lives in
+**Domain setup:** add `brooksinvitational.com` in Resend → Domains and publish the
+DNS records it gives you (SPF/DKIM). Until the domain is verified you can only send
+from `onboarding@resend.dev` or to your own account address.
+
+If `RESEND_API_KEY` is unset, sending is skipped; in non-production the reset API
+returns the token directly so the flow stays testable. The send logic lives in
 `src/lib/email.ts`.
 
 ---

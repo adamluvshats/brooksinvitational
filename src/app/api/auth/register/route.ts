@@ -3,6 +3,7 @@ import { handle, HttpError } from "@/lib/api";
 import { prisma } from "@/lib/prisma";
 import { hashPassword, createSession } from "@/lib/auth";
 import { registerSchema } from "@/lib/validation";
+import { sendWelcomeEmail } from "@/lib/email";
 
 export async function POST(req: NextRequest) {
   return handle(async () => {
@@ -26,6 +27,12 @@ export async function POST(req: NextRequest) {
       },
     });
     await createSession(user);
+
+    // Best-effort welcome email — never let a mail failure break registration.
+    sendWelcomeEmail(user.email, user.displayName).catch((err) => {
+      console.error("Failed to send welcome email:", err);
+    });
+
     return { id: user.id, username: user.username, displayName: user.displayName, role: user.role };
   });
 }
